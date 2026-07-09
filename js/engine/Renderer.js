@@ -1,20 +1,33 @@
 /**
  * Renderer — งานวาดทั้งหมดอยู่ที่นี่ที่เดียว
- * - พื้นหลังอวกาศ (เนบิวลา + ดาวกะพริบ) เตรียมล่วงหน้าใน offscreen canvas
- * - ลูกกวาดเรืองแสง 6 แบบ (ตีมอวกาศ)
- * - รองรับมือถือ: ปรับขนาดตามหน้าจอ + คมชัดบนจอ retina (devicePixelRatio)
+ *
+ * 🕹️ อาร์ตสไตล์: 8-bit pixel art + ฟีล CRT (แบบ Balatro)
+ * - สไปรต์ลูกกวาด 16x16 px สร้างด้วยโค้ดล้วน (ไม่ต้องมีไฟล์ภาพ)
+ *   แล้วขยาย 4 เท่าแบบไม่เกลี่ยพิกเซล (imageSmoothing = false)
+ * - เส้นสแกน (scanlines) + ขอบจอมืด (vignette) ซ้อนทับแบบ CRT
+ * - ดาวพื้นหลังกะพริบแบบขั้นบันได (quantized) ให้ฟีลเรโทร
  *
  * ใช้พิกัด "logical" คงที่ 512x512 (8 ช่อง x 64px) แล้วสเกลตอนวาด
- * ทำให้ลอจิกเกมไม่ต้องสนใจขนาดจอจริงเลย
  */
 export class Renderer {
   /** ขนาด logical ของกระดาน (px) */
   static LOGICAL = 512;
   /** ขนาดช่อง (px logical) */
   static CELL = 64;
+  /** ขนาดสไปรต์พิกเซล (16x16 ขยาย 4 เท่า = 64) */
+  static SPRITE = 16;
 
-  static COLORS = ['#ff4d6d', '#ffd84d', '#5cff9c', '#4db8ff', '#b46cff', '#ff9c3a'];
-  static GLOW   = ['#ff8fa3', '#ffe98f', '#a8ffcf', '#a3d9ff', '#d9b3ff', '#ffc98f'];
+  /** จานสี 8-bit ต่อชนิด: m=หลัก l=อ่อน d=เข้ม s=รอง */
+  static PALETTE = [
+    { m: '#e8404f', l: '#ff8090', d: '#9c2033', s: '#ffe0b0' }, // 0 ดาวเคราะห์วงแหวน
+    { m: '#ffd84d', l: '#fff0a0', d: '#b8912a', s: '#ffffff' }, // 1 ดาวประกาย
+    { m: '#4fe87f', l: '#a0ffc0', d: '#2a9c50', s: '#eafff2' }, // 2 คริสตัล
+    { m: '#4da8ff', l: '#a0d8ff', d: '#2a6ab8', s: '#f0f8ff' }, // 3 จันทร์เสี้ยว
+    { m: '#b46cff', l: '#d9b3ff', d: '#6c3ab8', s: '#ffffff' }, // 4 วงโคจร
+    { m: '#ff9c3a', l: '#ffc98f', d: '#b86a1e', s: '#ffffff' }, // 5 ดาวหาง
+  ];
+  /** สีเส้นขอบสไปรต์ (ดำอมม่วงแบบ Balatro) */
+  static OUTLINE = '#1a1030';
 
   /**
    * @param {HTMLCanvasElement} canvas
@@ -22,15 +35,177 @@ export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.buildSprites();
     this.buildBackground();
+    this.buildCRTOverlay();
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
+  // =====================================================
+  // สไปรต์พิกเซล 16x16 (สร้างด้วยกติกาต่อพิกเซล — pure function เทสต์ได้)
+  // =====================================================
+
+  /**
+   * คืนตารางสี 16x16 ของลูกกวาดชนิดนั้น (null = โปร่งใส)
+   * เป็น static pure function → เทสต์รูปทรงใน node ได้
+   * @param {number} type 0..5
+   * @returns {(string|null)[][]} grid[y][x]
+   */
+  static spriteData(type) {
+    const P = Renderer.PALETTE[type];
+    const O = Renderer.OUTLINE;
+    const S = Renderer.SPRITE;
+    const grid = [];
+    for (let y = 0; y < S; y++) {
+      grid[y] = [];
+      for (let x = 0; x < S; x++) {
+        const dx = x - 7.5, dy = y - 7.5;
+        const r2 = dx * dx + dy * dy;
+        let col = null;
+
+        // ทรงกลมพื้นฐาน: ขอบนอก + แสงบน-ซ้าย + เงาล่าง-ขวา
+        if (r2 <= 42.25) {
+          if (r2 > 30.25) col = O;
+          else col = (dx + dy < -3) ? P.l : (dx + dy > 4 ? P.d : P.m);
+        }
+
+        // ---- ลายประจำชนิด ----
+        switch (type) {
+          case 0: // วงแหวนดาวเคราะห์พาดกลาง
+            if (y === 8) col = (col === null) ? P.s : (col === O ? O : P.s);
+            if (y === 9 && col !== null && col !== O) col = P.d;
+            break;
+          case 1: // ดาวประกายกากบาท
+            if (col !== null && col !== O) {
+              const ax = Math.abs(dx), ay = Math.abs(dy);
+              if ((ax < 1 && ay < 4) || (ay < 1 && ax < 4) || (ax < 2 && ay < 2)) col = P.s;
+            }
+            break;
+          case 2: { // คริสตัลเพชร
+            const man = Math.abs(dx) + Math.abs(dy);
+            if (col !== null && col !== O) {
+              if (man <= 3.5) col = P.s;
+              else if (man <= 4.5) col = P.l;
+            }
+            break;
+          }
+          case 3: { // จันทร์เสี้ยว (วงกลมสว่าง โดนวงเงากินมุมบนขวา)
+            if (col !== null && col !== O) {
+              if (r2 <= 20.25) col = P.s;
+              const cx = x - 9.5, cy = y - 5.5;
+              if (cx * cx + cy * cy <= 16 && col === P.s) col = P.m;
+            }
+            break;
+          }
+          case 4: { // วงโคจร + ดวงจันทร์เล็ก
+            if (col !== null && col !== O) {
+              const r = Math.sqrt(r2);
+              if (Math.abs(r - 4.6) <= 0.75) col = P.s;
+            }
+            const mx = x - 12, my = y - 7;
+            if (mx * mx + my * my <= 2 && col !== null && col !== O) col = P.l;
+            break;
+          }
+          case 5: { // ดาวหาง: หัวสว่าง + หางเฉียงล่างซ้าย
+            const hx = x - 10, hy = y - 5;
+            if (hx * hx + hy * hy <= 6.25 && col !== null && col !== O) col = P.s;
+            const t = ((10 - x) + (y - 5)) / 2;      // ระยะตามแนวหาง
+            const off = (10 - x) - (y - 5);          // ระยะเบี่ยงข้างหาง
+            if (t >= 1 && t <= 5.5 && Math.abs(off) <= (5.5 - t) / 2) {
+              col = (col === null) ? P.l : (col === O ? O : P.l);
+            }
+            break;
+          }
+        }
+        grid[y][x] = col;
+      }
+    }
+    return grid;
+  }
+
+  /** เรนเดอร์ spriteData ลง offscreen canvas ทั้ง 6 ชนิด */
+  buildSprites() {
+    const S = Renderer.SPRITE;
+    /** @type {HTMLCanvasElement[]} */
+    this.sprites = [];
+    for (let type = 0; type < Renderer.PALETTE.length; type++) {
+      const c = document.createElement('canvas');
+      c.width = S; c.height = S;
+      const g = c.getContext('2d');
+      const grid = Renderer.spriteData(type);
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        if (grid[y][x]) { g.fillStyle = grid[y][x]; g.fillRect(x, y, 1, 1); }
+      }
+      this.sprites.push(c);
+    }
+  }
+
+  // =====================================================
+  // พื้นหลัง + CRT overlay (เตรียมครั้งเดียว)
+  // =====================================================
+
+  buildBackground() {
+    const L = Renderer.LOGICAL;
+    const bg = document.createElement('canvas');
+    bg.width = L; bg.height = L;
+    const g = bg.getContext('2d');
+    g.fillStyle = '#0a0e1e';
+    g.fillRect(0, 0, L, L);
+    // เนบิวลาแบบ dither พิกเซล (จุด 4px โปรยเป็นกลุ่ม แทน gradient เนียนๆ)
+    const clusters = [
+      [130, 100, 90, 'rgba(123,92,255,.22)'],
+      [400, 380, 110, 'rgba(77,184,255,.16)'],
+      [420, 90, 70, 'rgba(232,64,79,.14)'],
+    ];
+    for (const [cx, cy, cr, color] of clusters) {
+      g.fillStyle = color;
+      for (let i = 0; i < 260; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.sqrt(Math.random()) * cr;
+        const px = Math.floor((cx + Math.cos(a) * d) / 4) * 4;
+        const py = Math.floor((cy + Math.sin(a) * d) / 4) * 4;
+        g.fillRect(px, py, 4, 4);
+      }
+    }
+    this.background = bg;
+
+    /** ดาวพิกเซล (ตำแหน่งล็อกกับกริด 4px ให้คมแบบ 8-bit) */
+    this.stars = [];
+    for (let i = 0; i < 70; i++) {
+      this.stars.push({
+        x: Math.floor(Math.random() * (L / 4)) * 4,
+        y: Math.floor(Math.random() * (L / 4)) * 4,
+        size: Math.random() < 0.25 ? 8 : 4,
+        phase: Math.floor(Math.random() * 3),
+      });
+    }
+  }
+
+  /** เส้นสแกน + ขอบจอมืด ซ้อนทับให้ฟีลจอ CRT */
+  buildCRTOverlay() {
+    const L = Renderer.LOGICAL;
+    const c = document.createElement('canvas');
+    c.width = L; c.height = L;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(0,0,0,.16)';
+    for (let y = 0; y < L; y += 4) g.fillRect(0, y, L, 2);
+    const v = g.createRadialGradient(L / 2, L / 2, L * 0.42, L / 2, L / 2, L * 0.75);
+    v.addColorStop(0, 'transparent');
+    v.addColorStop(1, 'rgba(5,0,15,.4)');
+    g.fillStyle = v;
+    g.fillRect(0, 0, L, L);
+    this.crt = c;
+  }
+
+  // =====================================================
+  // ขนาดจอ + แปลงพิกัด
+  // =====================================================
+
   /** ปรับขนาด canvas ให้พอดีจอ (mobile-first) และคมชัดบน retina */
   resize() {
     const maxW = Math.min(window.innerWidth * 0.94, 512);
-    const maxH = window.innerHeight - 150; // เผื่อ header + hint
+    const maxH = window.innerHeight - 150;
     const cssSize = Math.max(240, Math.min(maxW, maxH));
     const dpr = window.devicePixelRatio || 1;
 
@@ -39,8 +214,9 @@ export class Renderer {
     this.canvas.width = Math.round(cssSize * dpr);
     this.canvas.height = Math.round(cssSize * dpr);
 
-    /** สเกลจาก logical → พิกเซลจริง */
     this.scale = this.canvas.width / Renderer.LOGICAL;
+    // สำคัญมากสำหรับ 8-bit: ห้ามเกลี่ยพิกเซล (ต้องตั้งใหม่ทุกครั้งที่ resize)
+    this.ctx.imageSmoothingEnabled = false;
   }
 
   /** แปลงพิกัดหน้าจอ → ช่องบนกระดาน (null ถ้าอยู่นอกกระดาน) */
@@ -54,200 +230,66 @@ export class Renderer {
     return { col, row };
   }
 
-  /** เตรียมพื้นหลังอวกาศครั้งเดียว (วาดซ้ำทุกเฟรมจะเปลือง) */
-  buildBackground() {
-    const bg = document.createElement('canvas');
-    bg.width = Renderer.LOGICAL; bg.height = Renderer.LOGICAL;
-    const g = bg.getContext('2d');
-    g.fillStyle = '#0a0e1e';
-    g.fillRect(0, 0, bg.width, bg.height);
-    const nebulas = [
-      [130, 100, 200, 'rgba(123,92,255,.14)'],
-      [400, 380, 240, 'rgba(77,184,255,.10)'],
-      [420, 90, 150, 'rgba(255,77,109,.08)'],
-    ];
-    for (const [x, y, r, color] of nebulas) {
-      const grad = g.createRadialGradient(x, y, 0, x, y, r);
-      grad.addColorStop(0, color);
-      grad.addColorStop(1, 'transparent');
-      g.fillStyle = grad;
-      g.fillRect(0, 0, bg.width, bg.height);
-    }
-    this.background = bg;
-
-    /** ดาวกะพริบ */
-    this.stars = [];
-    for (let i = 0; i < 90; i++) {
-      this.stars.push({
-        x: Math.random() * Renderer.LOGICAL,
-        y: Math.random() * Renderer.LOGICAL,
-        r: Math.random() * 1.4 + 0.3,
-        phase: Math.random() * Math.PI * 2,
-        speed: 0.5 + Math.random() * 2,
-      });
-    }
-  }
+  // =====================================================
+  // วาดต่อเฟรม
+  // =====================================================
 
   /**
    * วาด 1 เฟรม
    * @param {import('../board/Board.js').Board} board
-   * @param {import('../board/Cell.js').Cell|null} selected ช่องที่ถูกเลือกอยู่
-   * @param {number} time เวลาปัจจุบัน (ms) ใช้ทำอนิเมชันกะพริบ/หมุน
+   * @param {import('../board/Cell.js').Cell|null} selected
+   * @param {number} time เวลาปัจจุบัน (ms)
    */
   draw(board, selected, time) {
     const ctx = this.ctx;
+    const L = Renderer.LOGICAL;
     ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
-    ctx.clearRect(0, 0, Renderer.LOGICAL, Renderer.LOGICAL);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, L, L);
     ctx.drawImage(this.background, 0, 0);
 
+    // ดาวกะพริบแบบขั้นบันได 3 ระดับ (ฟีลเรโทร ไม่เฟดเนียน)
+    const STEPS = [0.25, 0.55, 0.95];
     for (const s of this.stars) {
-      const a = 0.3 + 0.7 * Math.abs(Math.sin(time / 1000 * s.speed + s.phase));
-      ctx.fillStyle = `rgba(255,255,255,${a.toFixed(2)})`;
-      ctx.fillRect(s.x, s.y, s.r, s.r);
+      const a = STEPS[(Math.floor(time / 300) + s.phase) % 3];
+      ctx.fillStyle = `rgba(255,255,255,${a})`;
+      ctx.fillRect(s.x, s.y, s.size === 8 ? 3 : 2, s.size === 8 ? 3 : 2);
     }
 
     board.forEachCell((cell) => {
-      if (cell.candy) this.drawCandy(cell, time);
+      if (cell.candy) this.drawCandy(cell);
     });
 
     if (selected) this.drawSelection(selected, time);
+
+    // CRT ปิดท้ายทับทุกอย่าง
+    ctx.drawImage(this.crt, 0, 0);
   }
 
-  /** กรอบไฮไลต์ช่องที่เลือก (เต้นตุบๆ) */
-  drawSelection(cell, time) {
-    const ctx = this.ctx;
-    const C = Renderer.CELL;
-    const pulse = 2 + Math.sin(time / 150) * 1.5;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
-    ctx.shadowColor = '#4db8ff';
-    ctx.shadowBlur = 12;
-    ctx.strokeRect(cell.col * C + pulse, cell.row * C + pulse, C - pulse * 2, C - pulse * 2);
-    ctx.shadowBlur = 0;
-  }
-
-  /** วาดลูกกวาดตีมอวกาศ 6 แบบ */
-  drawCandy(cell, time) {
-    const ctx = this.ctx;
+  /** วาดลูกกวาดจากสไปรต์ (ขยาย 4 เท่า คมกริบ) */
+  drawCandy(cell) {
     const C = Renderer.CELL;
     const candy = cell.candy;
-    const px = cell.col * C + C / 2 + candy.offsetX;
-    const py = cell.row * C + C / 2 + candy.offsetY;
-    const r = (C / 2 - 7) * candy.scale;
-    if (r <= 0) return;
-
-    const color = Renderer.COLORS[candy.type];
-    const glow = Renderer.GLOW[candy.type];
-
-    ctx.save();
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 10;
-    const grad = ctx.createRadialGradient(px - r * 0.35, py - r * 0.35, r * 0.1, px, py, r);
-    grad.addColorStop(0, glow);
-    grad.addColorStop(0.7, color);
-    grad.addColorStop(1, Renderer.shade(color, -35));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    // ไฮไลต์เงาสะท้อน
-    ctx.fillStyle = 'rgba(255,255,255,.5)';
-    ctx.beginPath();
-    ctx.ellipse(px - r * 0.35, py - r * 0.4, r * 0.22, r * 0.13, -0.6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // สัญลักษณ์ประจำชนิด (ช่วยแยกสีสำหรับคนตาบอดสีด้วย)
-    switch (candy.type) {
-      case 0: { // ดาวเคราะห์มีวงแหวน
-        ctx.strokeStyle = 'rgba(255,255,255,.55)';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.ellipse(px, py, r * 1.05, r * 0.32, -0.4, 0, Math.PI * 2);
-        ctx.stroke();
-        break;
-      }
-      case 1: { // ดาวห้าแฉก
-        ctx.fillStyle = 'rgba(255,255,255,.75)';
-        Renderer.starPath(ctx, px, py, 5, r * 0.45, r * 0.2);
-        ctx.fill();
-        break;
-      }
-      case 2: { // คริสตัล
-        ctx.fillStyle = 'rgba(255,255,255,.6)';
-        ctx.beginPath();
-        ctx.moveTo(px, py - r * 0.5);
-        ctx.lineTo(px + r * 0.35, py);
-        ctx.lineTo(px, py + r * 0.5);
-        ctx.lineTo(px - r * 0.35, py);
-        ctx.closePath();
-        ctx.fill();
-        break;
-      }
-      case 3: { // จันทร์เสี้ยว
-        ctx.fillStyle = 'rgba(255,255,255,.65)';
-        ctx.beginPath();
-        ctx.arc(px, py, r * 0.45, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(px + r * 0.22, py - r * 0.1, r * 0.42, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-      }
-      case 4: { // วงโคจร + ดวงจันทร์เล็กวิ่งรอบ
-        ctx.strokeStyle = 'rgba(255,255,255,.5)';
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        ctx.arc(px, py, r * 0.55, 0, Math.PI * 2);
-        ctx.stroke();
-        const a = time / 300;
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(px + Math.cos(a) * r * 0.55, py + Math.sin(a) * r * 0.55, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-      }
-      case 5: { // ดาวหาง
-        ctx.fillStyle = 'rgba(255,255,255,.55)';
-        ctx.beginPath();
-        ctx.moveTo(px - r * 0.5, py + r * 0.4);
-        ctx.lineTo(px + r * 0.1, py - r * 0.05);
-        ctx.lineTo(px - r * 0.15, py + r * 0.15);
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(px + r * 0.15, py - r * 0.1, r * 0.2, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-      }
-    }
-    ctx.restore();
+    const size = C * candy.scale;
+    const px = cell.col * C + C / 2 + candy.offsetX - size / 2;
+    const py = cell.row * C + C / 2 + candy.offsetY - size / 2;
+    if (size <= 0) return;
+    this.ctx.drawImage(this.sprites[candy.type], px, py, size, size);
   }
 
-  /** วาดรูปดาวแฉก */
-  static starPath(ctx, cx, cy, spikes, outerR, innerR) {
-    let rot = -Math.PI / 2;
-    const step = Math.PI / spikes;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
-    for (let i = 0; i < spikes; i++) {
-      rot += step;
-      ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
-      rot += step;
-      ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
-    }
-    ctx.closePath();
-  }
-
-  /** ปรับความสว่างของสี hex */
-  static shade(hex, amount) {
-    const n = parseInt(hex.slice(1), 16);
-    const clamp = (v) => Math.max(0, Math.min(255, v));
-    const r = clamp((n >> 16) + amount);
-    const g = clamp(((n >> 8) & 255) + amount);
-    const b = clamp((n & 255) + amount);
-    return `rgb(${r},${g},${b})`;
+  /** กรอบเลือกแบบพิกเซล: มุมหนา 4 มุม กะพริบเป็นจังหวะ */
+  drawSelection(cell, time) {
+    if (Math.floor(time / 250) % 2 === 1) return; // กะพริบแบบ on/off
+    const ctx = this.ctx;
+    const C = Renderer.CELL;
+    const x = cell.col * C, y = cell.row * C;
+    const t = 4;  // ความหนาเส้น
+    const len = 18; // ความยาวมุม
+    ctx.fillStyle = '#ffffff';
+    // มุมบนซ้าย / บนขวา / ล่างซ้าย / ล่างขวา
+    ctx.fillRect(x + 2, y + 2, len, t); ctx.fillRect(x + 2, y + 2, t, len);
+    ctx.fillRect(x + C - 2 - len, y + 2, len, t); ctx.fillRect(x + C - 2 - t, y + 2, t, len);
+    ctx.fillRect(x + 2, y + C - 2 - t, len, t); ctx.fillRect(x + 2, y + C - 2 - len, t, len);
+    ctx.fillRect(x + C - 2 - len, y + C - 2 - t, len, t); ctx.fillRect(x + C - 2 - t, y + C - 2 - len, t, len);
   }
 }

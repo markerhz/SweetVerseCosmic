@@ -13,6 +13,7 @@
 - Swap: สลับช่องติดกันพร้อมอนิเมชันนุ่ม, ล็อกอินพุตระหว่างอนิเมชัน
 - System stubs พร้อม interface และแผนเวอร์ชัน: `MatchSystem`, `GravitySystem`, `ScoreSystem`, `SaveSystem`
 - เอกสาร: README, ROADMAP, GDD, CHANGELOG
+- **อาร์ตสไตล์ 8-bit + CRT (แบบ Balatro)**: สไปรต์พิกเซล 16x16 สร้างด้วยโค้ดล้วน (`Renderer.spriteData` เป็น pure function เทสต์ได้), ขยาย 4 เท่าไม่เกลี่ยพิกเซล, เส้นสแกน + ขอบจอมืดแบบ CRT, ดาวกะพริบแบบขั้นบันได, เนบิวลา dither, ฟอนต์พิกเซล Press Start 2P, กรอบเลือกมุมกะพริบสไตล์เรโทร
 
 ### ข้อจำกัดที่รู้อยู่แล้ว (ตั้งใจตามแผน Alpha)
 - ยังไม่มี match detection — สลับแล้วค้างตำแหน่งใหม่ ไม่มีการตรวจ/สลับกลับ
