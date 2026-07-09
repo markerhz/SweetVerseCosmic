@@ -27,6 +27,10 @@ const State = {
 export class Game {
   /** ระยะเวลาอนิเมชันสลับ (ms) */
   static SWAP_DURATION = 160;
+  /** ระยะเวลาอนิเมชันแตก (ms) */
+  static POP_DURATION = 180;
+  /** ระยะเวลาอนิเมชันหล่น (ms) */
+  static FALL_DURATION = 260;
 
   /**
    * @param {HTMLCanvasElement} canvas
@@ -99,12 +103,28 @@ export class Game {
   }
 
   /**
-   * สลับลูกกวาด 2 ช่องพร้อมอนิเมชันนุ่มๆ
-   * v0.2.x: หลังสลับจะต่อด้วย matchSystem.findMatches() ตรงนี้
+   * สลับลูกกวาด 2 ช่องพร้อมอนิเมชัน
+   * มี match → resolve cascade | ไม่มี → สลับกลับ
    */
   async swap(a, b) {
     this.state = State.ANIMATING;
 
+    await this.animateSwap(a, b);
+
+    const matches = this.matchSystem.findMatches();
+    if (matches.length === 0) {
+      // ไม่เกิด match → สลับกลับ
+      await this.animateSwap(a, b);
+      this.state = State.IDLE;
+      return;
+    }
+
+    await this.resolveCascade(matches);
+    this.state = State.IDLE;
+  }
+
+  /** สลับข้อมูล + เลื่อนภาพนุ่มๆ (เรียกซ้ำ = สลับกลับ) */
+  animateSwap(a, b) {
     const C = Renderer.CELL;
     const dx = (b.col - a.col) * C;
     const dy = (b.row - a.row) * C;
@@ -114,16 +134,52 @@ export class Game {
     b.candy.offsetX = -dx; b.candy.offsetY = -dy;
     a.candy.offsetX = dx;  a.candy.offsetY = dy;
 
-    await Promise.all([
+    return Promise.all([
       this.animation.tween(a.candy, { offsetX: 0, offsetY: 0 }, Game.SWAP_DURATION),
       this.animation.tween(b.candy, { offsetX: 0, offsetY: 0 }, Game.SWAP_DURATION),
     ]);
+  }
 
-    // TODO (v0.2.1):
-    //   const matches = this.matchSystem.findMatches();
-    //   ถ้าไม่มี match → สลับกลับ
-    //   ถ้ามี → เคลียร์ → gravitySystem.apply() → scoreSystem.addMatchScore()
+  /**
+   * ลูป cascade: แตก → หล่น → เติม → เช็ค match ใหม่ → วนจนนิ่ง
+   * @param {Array} matches ผลจาก findMatches() รอบแรก
+   */
+  async resolveCascade(matches) {
+    const C = Renderer.CELL;
+    let chain = 1;
 
-    this.state = State.IDLE;
+    while (matches.length > 0) {
+      // 1) อนิเมชันแตก: หดลูกกวาดจนหาย แล้วลบออกจากกระดาน
+      const cells = this.matchSystem.collectCells(matches);
+      await Promise.all(
+        cells.map((cell) => this.animation.tween(cell.candy, { scale: 0 }, Game.POP_DURATION))
+      );
+      for (const cell of cells) cell.candy = null;
+
+      // TODO v0.2.2: this.scoreSystem.addMatchScore(cells, { chain })
+      // TODO v0.2.3: this.matchSystem.resolveMatches(matches) → ลูกกวาดพิเศษ
+
+      // 2) แรงโน้มถ่วง: ของเก่าหล่นลงมา
+      const falls = this.gravitySystem.applyGravity();
+      const tweens = [];
+      for (const f of falls) {
+        const candy = this.board.getCell(f.col, f.toRow).candy;
+        candy.offsetY = -(f.toRow - f.fromRow) * C; // ภาพยังอยู่ที่เดิม
+        tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
+      }
+
+      // 3) เติมใหม่: spawn จากเหนือกระดานแล้วหล่นลงมา
+      const spawned = this.gravitySystem.refill();
+      for (const s of spawned) {
+        const candy = this.board.getCell(s.col, s.row).candy;
+        candy.offsetY = -(s.row + 1.5) * C;
+        tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
+      }
+      await Promise.all(tweens);
+
+      // 4) หล่นแล้วอาจเกิด match ใหม่ → วนต่อ (cascade)
+      matches = this.matchSystem.findMatches();
+      chain++;
+    }
   }
 }
