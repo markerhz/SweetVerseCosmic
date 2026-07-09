@@ -176,5 +176,64 @@ console.log('--- hasPossibleMove (กันเกมตัน) ---');
   ok(new MatchSystem(b).findMatches().length === 0, 'reshuffle แล้วไม่มี match ตั้งต้น');
 }
 
+console.log('--- ลูกกวาดพิเศษ: planClears ---');
+{
+  setTypes(board, fillers('00001123'));
+  const m = match.findMatches();
+  const swapCell = board.getCell(0, 0);
+  const { clear, spawns } = match.planClears(m, swapCell);
+  ok(clear.size === 4, 'เรียง 4 → เคลียร์ 4 ช่อง');
+  ok(spawns.length === 1 && spawns[0].special === 'bomb' && spawns[0].cell === swapCell,
+    'เรียง 4 → 💣 เกิดตรงช่องที่สลับ');
+}
+{
+  setTypes(board, fillers('00000123'));
+  const m = match.findMatches();
+  const { spawns } = match.planClears(m, null);
+  ok(spawns.length === 1 && spawns[0].special === 'nova', 'เรียง 5 → 🌟 โนวา');
+  ok(spawns[0].cell === board.getCell(2, 0), 'ไม่ได้สลับ → เกิดกลางแถว');
+}
+
+console.log('--- ลูกกวาดพิเศษ: expandClears ---');
+{
+  setTypes(board, fillers(rot(0)));
+  board.getCell(3, 3).candy.special = 'bomb';
+  const clear = new Set([board.getCell(3, 3)]);
+  const info = match.expandClears(clear, () => 0.99);
+  ok(clear.size === 9 && info.bombs === 1, '💣 กวาด 3x3 = 9 ช่อง (ได้ ' + clear.size + ')');
+}
+{
+  setTypes(board, fillers(rot(0)));
+  board.getCell(3, 3).candy.special = 'bomb';
+  board.getCell(4, 3).candy.special = 'bomb'; // ระเบิดติดกัน → ลูกโซ่
+  const clear = new Set([board.getCell(3, 3)]);
+  const info = match.expandClears(clear, () => 0.99);
+  ok(info.bombs === 2 && clear.size === 12, 'ระเบิดลูกโซ่ กวาด 12 ช่อง (ได้ ' + clear.size + ')');
+}
+{
+  setTypes(board, fillers(rot(0)));
+  board.getCell(3, 3).candy.special = 'nova';
+  const clear = new Set([board.getCell(3, 3)]);
+  const info = match.expandClears(clear, () => 0); // สุ่มได้สี 0 เสมอ
+  let count0 = 0;
+  board.forEachCell((c) => { if (c.candy && c.candy.type === 0 && !c.candy.special) count0++; });
+  ok(info.novas === 1 && clear.size === 1 + count0, '🌟 โดนลูกหลง → ล้างสีสุ่มทั้งกระดาน (' + clear.size + ' ช่อง)');
+}
+{
+  // โนวาไม่มีสี — ต้องไม่ถูกนับเป็น match ปกติ
+  setTypes(board, fillers('00032103'));
+  board.getCell(1, 0).candy.special = 'nova'; // กลางแถว 000 เป็นโนวา
+  ok(match.findMatches().length === 0, 'โนวาไม่จับคู่แบบปกติ');
+}
+
+console.log('--- ลูกกวาดพิเศษ: โบนัสคะแนน ---');
+{
+  const score = new ScoreSystem();
+  const r = score.addMatchScore(new Array(9).fill({}), { chain: 1, bombs: 1, novas: 0 });
+  ok(r.chips === 140 && r.gained === 140, '9 เม็ด + ระเบิด 1 = 140 chips (ได้ ' + r.chips + ')');
+  const r2 = score.addMatchScore(new Array(10).fill({}), { chain: 2, bombs: 0, novas: 1 });
+  ok(r2.chips === 200 && r2.mult === 1.5 && r2.gained === 300, 'โนวา +100, chain 2 → 300 (ได้ ' + r2.gained + ')');
+}
+
 console.log('\nผลรวม: ' + pass + ' ผ่าน, ' + fail + ' ไม่ผ่าน');
 process.exit(fail > 0 ? 1 : 0);

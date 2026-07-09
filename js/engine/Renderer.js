@@ -124,21 +124,79 @@ export class Renderer {
     return grid;
   }
 
-  /** เรนเดอร์ spriteData ลง offscreen canvas ทั้ง 6 ชนิด */
-  buildSprites() {
+  /**
+   * ตารางสีของ "ชั้นระเบิด" ที่วางทับสไปรต์สีเดิม — 2 เฟรม (แกนเต้นตุบๆ)
+   * @param {number} frame 0 หรือ 1
+   * @returns {(string|null)[][]}
+   */
+  static bombOverlayData(frame) {
     const S = Renderer.SPRITE;
+    const grid = [];
+    for (let y = 0; y < S; y++) {
+      grid[y] = [];
+      for (let x = 0; x < S; x++) {
+        const dx = x - 7.5, dy = y - 7.5;
+        const r2 = dx * dx + dy * dy;
+        let col = null;
+        if (r2 <= 12.25) col = Renderer.OUTLINE;              // แกนดำ r3.5
+        const coreR2 = frame === 0 ? 3 : 6;                   // แกนไฟเต้น
+        if (r2 <= coreR2) col = frame === 0 ? '#ff6b1a' : '#ffd84d';
+        // ประกายชนวนมุมขวาบน
+        const fx = x - 12, fy = y - 3;
+        if (fx * fx + fy * fy <= (frame === 0 ? 1 : 2.5)) col = '#ffffff';
+        grid[y][x] = col;
+      }
+    }
+    return grid;
+  }
+
+  /**
+   * ตารางสีของโนวา — ดาว 4 แฉกเรืองแสง 3 เฟรม (สีหมุนวน)
+   * @param {number} frame 0..2
+   * @returns {(string|null)[][]}
+   */
+  static novaData(frame) {
+    const S = Renderer.SPRITE;
+    const MAIN = ['#ff4d6d', '#ffd84d', '#4da8ff'][frame];
+    const EDGE = ['#b46cff', '#ff6b1a', '#5cff9c'][frame];
+    const grid = [];
+    for (let y = 0; y < S; y++) {
+      grid[y] = [];
+      for (let x = 0; x < S; x++) {
+        const ax = Math.abs(x - 7.5), ay = Math.abs(y - 7.5);
+        let col = null;
+        const arm = (ax < 1.5 && ay < 7.5) || (ay < 1.5 && ax < 7.5); // แฉกยาว
+        const body = ax + ay <= 5;                                     // ตัวเพชรกลาง
+        if (arm || body) col = MAIN;
+        if (ax + ay > 3.5 && ax + ay <= 5) col = EDGE;                 // ขอบเพชร
+        if (ax + ay <= 2) col = '#ffffff';                             // แกนขาว
+        grid[y][x] = col;
+      }
+    }
+    return grid;
+  }
+
+  /** แปลงตารางสีเป็น offscreen canvas */
+  static gridToCanvas(grid) {
+    const S = Renderer.SPRITE;
+    const c = document.createElement('canvas');
+    c.width = S; c.height = S;
+    const g = c.getContext('2d');
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      if (grid[y][x]) { g.fillStyle = grid[y][x]; g.fillRect(x, y, 1, 1); }
+    }
+    return c;
+  }
+
+  /** เรนเดอร์สไปรต์ทั้งหมด: ลูกกวาด 6 ชนิด + ชั้นระเบิด 2 เฟรม + โนวา 3 เฟรม */
+  buildSprites() {
     /** @type {HTMLCanvasElement[]} */
     this.sprites = [];
     for (let type = 0; type < Renderer.PALETTE.length; type++) {
-      const c = document.createElement('canvas');
-      c.width = S; c.height = S;
-      const g = c.getContext('2d');
-      const grid = Renderer.spriteData(type);
-      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-        if (grid[y][x]) { g.fillStyle = grid[y][x]; g.fillRect(x, y, 1, 1); }
-      }
-      this.sprites.push(c);
+      this.sprites.push(Renderer.gridToCanvas(Renderer.spriteData(type)));
     }
+    this.bombOverlays = [0, 1].map((f) => Renderer.gridToCanvas(Renderer.bombOverlayData(f)));
+    this.novaFrames = [0, 1, 2].map((f) => Renderer.gridToCanvas(Renderer.novaData(f)));
   }
 
   // =====================================================
@@ -257,7 +315,7 @@ export class Renderer {
     }
 
     board.forEachCell((cell) => {
-      if (cell.candy) this.drawCandy(cell);
+      if (cell.candy) this.drawCandy(cell, time);
     });
 
     if (selected) this.drawSelection(selected, time);
@@ -266,15 +324,27 @@ export class Renderer {
     ctx.drawImage(this.crt, 0, 0);
   }
 
-  /** วาดลูกกวาดจากสไปรต์ (ขยาย 4 เท่า คมกริบ) */
-  drawCandy(cell) {
+  /** วาดลูกกวาดจากสไปรต์ (ขยาย 4 เท่า คมกริบ) — ตัวพิเศษมีเฟรมกะพริบ */
+  drawCandy(cell, time = 0) {
     const C = Renderer.CELL;
     const candy = cell.candy;
     const size = C * candy.scale;
     const px = cell.col * C + C / 2 + candy.offsetX - size / 2;
     const py = cell.row * C + C / 2 + candy.offsetY - size / 2;
     if (size <= 0) return;
+
+    if (candy.special === 'nova') {
+      // โนวา: ดาวเรืองแสงสีหมุนวน 3 เฟรม
+      const frame = Math.floor(time / 150) % 3;
+      this.ctx.drawImage(this.novaFrames[frame], px, py, size, size);
+      return;
+    }
     this.ctx.drawImage(this.sprites[candy.type], px, py, size, size);
+    if (candy.special === 'bomb') {
+      // ระเบิด: สีเดิม + แกนไฟเต้นตุบๆ 2 เฟรม
+      const frame = Math.floor(time / 250) % 2;
+      this.ctx.drawImage(this.bombOverlays[frame], px, py, size, size);
+    }
   }
 
   /** กรอบเลือกแบบพิกเซล: มุมหนา 4 มุม กะพริบเป็นจังหวะ */

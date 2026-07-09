@@ -13,6 +13,7 @@ import { Renderer } from './Renderer.js';
 import { Input } from './Input.js';
 import { Animation } from './Animation.js';
 import { Board } from '../board/Board.js';
+import { Candy } from '../board/Candy.js';
 import { MatchSystem } from '../systems/MatchSystem.js';
 import { GravitySystem } from '../systems/GravitySystem.js';
 import { ScoreSystem } from '../systems/ScoreSystem.js';
@@ -121,22 +122,28 @@ export class Game {
 
   /**
    * สลับลูกกวาด 2 ช่องพร้อมอนิเมชัน
-   * มี match → resolve cascade | ไม่มี → สลับกลับ
+   * โนวา → ล้างสีทันที | มี match → resolve cascade | ไม่มี → สลับกลับ
    */
   async swap(a, b) {
     this.state = State.ANIMATING;
 
+    const hasNova = a.candy.special === 'nova' || b.candy.special === 'nova';
     await this.animateSwap(a, b);
 
-    const matches = this.matchSystem.findMatches();
-    if (matches.length === 0) {
-      // ไม่เกิด match → สลับกลับ
-      await this.animateSwap(a, b);
-      this.state = State.IDLE;
-      return;
+    if (hasNova) {
+      // โนวาเป็น match ในตัวเอง — ทำงานทันทีไม่ต้องเช็ค
+      await this.activateNovaSwap(a, b);
+    } else {
+      const matches = this.matchSystem.findMatches();
+      if (matches.length === 0) {
+        // ไม่เกิด match → สลับกลับ
+        await this.animateSwap(a, b);
+        this.state = State.IDLE;
+        return;
+      }
+      // ตัวพิเศษเกิดตรงช่องปลายทางที่ผู้เล่นสลับไป (b)
+      await this.resolveCascade(matches, b);
     }
-
-    await this.resolveCascade(matches);
 
     // กันเกมตัน: ถ้าไม่เหลือตาเดิน สับกระดานใหม่จนเดินได้
     if (!this.matchSystem.hasPossibleMove()) {
@@ -167,48 +174,103 @@ export class Game {
   }
 
   /**
-   * ลูป cascade: แตก → หล่น → เติม → เช็ค match ใหม่ → วนจนนิ่ง
+   * ลูป cascade: วางแผนเคลียร์ → ขยาย (ระเบิด/โนวา) → แตก → หล่น → เติม → วนจนนิ่ง
    * @param {Array} matches ผลจาก findMatches() รอบแรก
+   * @param {import('../board/Cell.js').Cell|null} swapCell ช่องที่ผู้เล่นสลับ (ให้ตัวพิเศษเกิดตรงนั้น)
+   * @param {number} startChain ลำดับชั้นเริ่มต้น (nova swap ต่อที่ชั้น 2)
    */
-  async resolveCascade(matches) {
-    const C = Renderer.CELL;
-    let chain = 1;
+  async resolveCascade(matches, swapCell = null, startChain = 1) {
+    let chain = startChain;
 
     while (matches.length > 0) {
-      // 1) อนิเมชันแตก: หดลูกกวาดจนหาย แล้วลบออกจากกระดาน
-      const cells = this.matchSystem.collectCells(matches);
-      await Promise.all(
-        cells.map((cell) => this.animation.tween(cell.candy, { scale: 0 }, Game.POP_DURATION))
-      );
-      for (const cell of cells) cell.candy = null;
+      const { clear, spawns } = this.matchSystem.planClears(matches, chain === startChain ? swapCell : null);
+      const info = this.matchSystem.expandClears(clear);
+      await this.clearStep(clear, spawns, { chain, bombs: info.bombs, novas: info.novas });
+      await this.dropAndRefill();
 
-      // คิดคะแนน: chips × mult (chain สูง = ตัวคูณสูง)
-      const result = this.scoreSystem.addMatchScore(cells, { chain });
-      this.updateHUD(result);
-
-      // TODO v0.2.3: this.matchSystem.resolveMatches(matches) → ลูกกวาดพิเศษ
-
-      // 2) แรงโน้มถ่วง: ของเก่าหล่นลงมา
-      const falls = this.gravitySystem.applyGravity();
-      const tweens = [];
-      for (const f of falls) {
-        const candy = this.board.getCell(f.col, f.toRow).candy;
-        candy.offsetY = -(f.toRow - f.fromRow) * C; // ภาพยังอยู่ที่เดิม
-        tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
-      }
-
-      // 3) เติมใหม่: spawn จากเหนือกระดานแล้วหล่นลงมา
-      const spawned = this.gravitySystem.refill();
-      for (const s of spawned) {
-        const candy = this.board.getCell(s.col, s.row).candy;
-        candy.offsetY = -(s.row + 1.5) * C;
-        tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
-      }
-      await Promise.all(tweens);
-
-      // 4) หล่นแล้วอาจเกิด match ใหม่ → วนต่อ (cascade)
       matches = this.matchSystem.findMatches();
       chain++;
     }
+  }
+
+  /**
+   * สลับโนวา: ล้างสีของอีกฝั่งทั้งกระดาน (โนวา + โนวา = ล้างทั้งกระดาน!)
+   * หลัง swap แล้ว a ถือลูกกวาดเดิมของ b และกลับกัน
+   */
+  async activateNovaSwap(a, b) {
+    const novaCell = a.candy.special === 'nova' ? a : b;
+    const otherCell = novaCell === a ? b : a;
+    const clear = new Set([novaCell]);
+
+    if (otherCell.candy.special === 'nova') {
+      // โนวาคู่ = ล้างทั้งกระดาน
+      this.board.forEachCell((c) => { if (c.candy) clear.add(c); });
+    } else {
+      const target = otherCell.candy.type;
+      this.board.forEachCell((c) => {
+        if (c.candy && c.candy.type === target && !c.candy.special) clear.add(c);
+      });
+    }
+
+    // ตั้ง special ของโนวาเป็น null ก่อนขยาย — กันโนวาตัวเองยิงล้างสีสุ่มซ้ำ
+    novaCell.candy.special = null;
+    const info = this.matchSystem.expandClears(clear);
+    await this.clearStep(clear, [], { chain: 1, bombs: info.bombs, novas: info.novas + 1 });
+    await this.dropAndRefill();
+
+    // ต่อ cascade ตามปกติ (นับเป็นชั้น 2 ขึ้นไป)
+    await this.resolveCascade(this.matchSystem.findMatches(), null, 2);
+  }
+
+  /**
+   * 1 สเต็ปการแตก: อนิเมชันหด → ลบ → แปลงช่องเกิดตัวพิเศษ → คิดคะแนน
+   * @param {Set} clear ช่องที่จะแตก
+   * @param {Array<{cell:object, type:number, special:string}>} spawns ตัวพิเศษที่จะเกิด
+   * @param {{chain:number, bombs:number, novas:number}} ctx
+   */
+  async clearStep(clear, spawns, ctx) {
+    const spawnCells = new Set(spawns.map((s) => s.cell));
+    const cells = Array.from(clear);
+
+    // อนิเมชันแตก (ช่องที่จะกลายเป็นตัวพิเศษไม่ต้องหด)
+    await Promise.all(
+      cells
+        .filter((cell) => !spawnCells.has(cell))
+        .map((cell) => this.animation.tween(cell.candy, { scale: 0 }, Game.POP_DURATION))
+    );
+    for (const cell of cells) {
+      if (!spawnCells.has(cell)) cell.candy = null;
+    }
+
+    // แปลงช่องเกิดตัวพิเศษ: ลูกกวาดใหม่สีเดิม + ติดตั้ง special
+    for (const s of spawns) {
+      const candy = new Candy(s.type);
+      candy.special = s.special;
+      s.cell.candy = candy;
+    }
+
+    // คิดคะแนน: นับทุกช่องที่ถูกเคลียร์ (รวมช่องที่แปลงเป็นตัวพิเศษ) + โบนัสระเบิด/โนวา
+    const result = this.scoreSystem.addMatchScore(cells, ctx);
+    this.updateHUD(result);
+  }
+
+  /** แรงโน้มถ่วง + เติมใหม่ พร้อมอนิเมชันหล่น */
+  async dropAndRefill() {
+    const C = Renderer.CELL;
+    const tweens = [];
+
+    const falls = this.gravitySystem.applyGravity();
+    for (const f of falls) {
+      const candy = this.board.getCell(f.col, f.toRow).candy;
+      candy.offsetY = -(f.toRow - f.fromRow) * C; // ภาพยังอยู่ที่เดิม
+      tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
+    }
+    const spawned = this.gravitySystem.refill();
+    for (const s of spawned) {
+      const candy = this.board.getCell(s.col, s.row).candy;
+      candy.offsetY = -(s.row + 1.5) * C; // spawn จากเหนือกระดาน
+      tweens.push(this.animation.tween(candy, { offsetY: 0 }, Game.FALL_DURATION));
+    }
+    await Promise.all(tweens);
   }
 }

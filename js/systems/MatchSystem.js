@@ -1,9 +1,11 @@
 /**
- * MatchSystem — ตรวจจับ match บนกระดาน
+ * MatchSystem — ตรวจจับ match + วางแผนการเคลียร์ + ลูกกวาดพิเศษ
  *
- * ✅ v0.2.1: implement findMatches แล้ว (พอร์ตจากลอจิกที่ผ่านเทสต์)
- * ⏳ v0.2.3: resolveMatches จะสร้างลูกกวาดพิเศษ (เรียง 4 = ระเบิด, เรียง 5 = โนวา)
+ * ✅ v0.2.1: findMatches, hasPossibleMove
+ * ✅ v0.2.3: planClears (เรียง 4 = 💣, เรียง 5 = 🌟) + expandClears (ระเบิดลูกโซ่, โนวาล้างสี)
  */
+import { Candy } from '../board/Candy.js';
+
 export class MatchSystem {
   /**
    * @param {import('../board/Board.js').Board} board
@@ -20,10 +22,10 @@ export class MatchSystem {
     const N = this.board.size;
     const groups = [];
 
-    // ชนิดของช่อง (-1 = ว่าง/จับคู่ไม่ได้ — ค่าที่ไม่มีทางเท่ากัน 3 ตัวติด)
+    // ชนิดของช่อง (-1 = ว่าง/จับคู่ไม่ได้ — โนวาไม่มีสี จับคู่แบบปกติไม่ได้)
     const typeAt = (col, row) => {
       const cell = this.board.getCell(col, row);
-      return (cell && cell.candy) ? cell.candy.type : -1;
+      return (cell && cell.candy && cell.candy.special !== 'nova') ? cell.candy.type : -1;
     };
 
     // สแกนแนวนอน
@@ -71,11 +73,65 @@ export class MatchSystem {
   }
 
   /**
-   * เคลียร์ match + สร้างลูกกวาดพิเศษ
-   * @param {Array} matches
+   * วางแผนการเคลียร์: ช่องไหนแตก + ลูกกวาดพิเศษเกิดที่ไหน
+   * เรียง 4 = 💣 ระเบิด | เรียง 5+ = 🌟 ซูเปอร์โนวา
+   * ตัวพิเศษเกิดตรงช่องที่ผู้เล่นสลับ (ถ้าอยู่ในแถวนั้น) ไม่งั้นเกิดตรงกลางแถว
+   * @param {Array} matches ผลจาก findMatches()
+   * @param {import('../board/Cell.js').Cell|null} swapCell ช่องที่ผู้เล่นเพิ่งสลับ
+   * @returns {{clear: Set<import('../board/Cell.js').Cell>, spawns: Array<{cell:object, type:number, special:string}>}}
    */
-  resolveMatches(matches) {
-    // TODO v0.2.3: เรียง 4 → 💣 ระเบิด, เรียง 5 → 🌟 ซูเปอร์โนวา
+  planClears(matches, swapCell = null) {
+    const clear = new Set();
+    const spawns = [];
+    for (const g of matches) {
+      for (const cell of g.cells) clear.add(cell);
+      if (g.length >= 4) {
+        let spot = g.cells[Math.floor(g.length / 2)];
+        if (swapCell && g.cells.includes(swapCell)) spot = swapCell;
+        spawns.push({ cell: spot, type: g.type, special: g.length >= 5 ? 'nova' : 'bomb' });
+      }
+    }
+    return { clear, spawns };
+  }
+
+  /**
+   * ขยายการเคลียร์: ระเบิดกวาด 3x3 (ลูกโซ่ได้), โนวาที่โดนลูกหลงล้างสีสุ่ม 1 สี
+   * แก้ไข Set ที่ส่งเข้ามาโดยตรง
+   * @param {Set<import('../board/Cell.js').Cell>} clear
+   * @param {() => number} [rng]
+   * @returns {{bombs:number, novas:number}} จำนวนตัวพิเศษที่ทำงานในสเต็ปนี้
+   */
+  expandClears(clear, rng = Math.random) {
+    let bombs = 0, novas = 0;
+    const processed = new Set();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const cell of Array.from(clear)) {
+        if (processed.has(cell)) continue;
+        processed.add(cell);
+        const candy = cell.candy;
+        if (!candy) continue;
+        if (candy.special === 'bomb') {
+          bombs++;
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const n = this.board.getCell(cell.col + dc, cell.row + dr);
+              if (n && n.candy && !clear.has(n)) { clear.add(n); changed = true; }
+            }
+          }
+        } else if (candy.special === 'nova') {
+          novas++;
+          const target = Math.floor(rng() * Candy.TYPE_COUNT);
+          this.board.forEachCell((c) => {
+            if (c.candy && c.candy.type === target && !c.candy.special && !clear.has(c)) {
+              clear.add(c); changed = true;
+            }
+          });
+        }
+      }
+    }
+    return { bombs, novas };
   }
 
   /**
