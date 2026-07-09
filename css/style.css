@@ -1,0 +1,31 @@
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:radial-gradient(ellipse at 30% 10%,#1b1440 0%,#0b1020 55%,#05070f 100%);
+  color:#fff;
+  font-family:'Segoe UI',system-ui,Arial,sans-serif;
+  text-align:center;
+  overflow:hidden;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+}
+#app{
+  max-width:560px;margin:0 auto;padding:8px;
+  display:flex;flex-direction:column;align-items:center;
+  height:100%;
+}
+header h1{
+  margin:6px 0 8px;font-size:1.35em;letter-spacing:1px;
+  text-shadow:0 0 12px #7b5cff,0 0 30px #4db8ff;
+}
+header small{font-size:.5em;opacity:.6}
+canvas{
+  border:2px solid rgba(123,92,255,.6);
+  border-radius:12px;
+  background:#0a0e1e;
+  display:block;
+  box-shadow:0 0 30px rgba(77,184,255,.25),inset 0 0 60px rgba(27,20,64,.8);
+  touch-action:none;
+}
+#hint{font-size:.75em;opacity:.55;margin:10px 0}
