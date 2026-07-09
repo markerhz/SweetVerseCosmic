@@ -1,2 +1,2 @@
 body{margin:0;background:#0b1020;color:#fff;font-family:Arial,sans-serif;text-align:center}
-canvas{border:2px solid #fff;max-width:95vw;image-rendering:pixelated;background:#111827;margin-top:10px}
+canvas{border:2px solid #fff;max-width:95vw;background:#111827;image-rendering:pixelated;margin:10px auto;display:block}
