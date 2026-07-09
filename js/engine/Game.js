@@ -54,6 +54,23 @@ export class Game {
     this.selected = null;
     this.state = State.IDLE;
     this.lastTime = 0;
+
+    // ---- HUD (DOM) ----
+    this.scoreEl = document.getElementById('score');
+    this.multEl = document.getElementById('mult');
+    this.updateHUD(null);
+  }
+
+  /**
+   * อัปเดต HUD คะแนน
+   * @param {{chips:number, mult:number, gained:number}|null} result ผลสเต็ปล่าสุด (null = ว่าง)
+   */
+  updateHUD(result) {
+    if (this.scoreEl) this.scoreEl.textContent = this.scoreSystem.score;
+    if (this.multEl) {
+      this.multEl.textContent = result ? 'x' + result.mult.toFixed(1) : 'x1.0';
+      this.multEl.classList.toggle('hot', !!result && result.mult > 1);
+    }
   }
 
   /** เริ่มลูปหลัก */
@@ -120,6 +137,15 @@ export class Game {
     }
 
     await this.resolveCascade(matches);
+
+    // กันเกมตัน: ถ้าไม่เหลือตาเดิน สับกระดานใหม่จนเดินได้
+    if (!this.matchSystem.hasPossibleMove()) {
+      let guard = 0;
+      do {
+        this.board.fillRandom();
+      } while (!this.matchSystem.hasPossibleMove() && ++guard < 20);
+    }
+
     this.state = State.IDLE;
   }
 
@@ -156,7 +182,10 @@ export class Game {
       );
       for (const cell of cells) cell.candy = null;
 
-      // TODO v0.2.2: this.scoreSystem.addMatchScore(cells, { chain })
+      // คิดคะแนน: chips × mult (chain สูง = ตัวคูณสูง)
+      const result = this.scoreSystem.addMatchScore(cells, { chain });
+      this.updateHUD(result);
+
       // TODO v0.2.3: this.matchSystem.resolveMatches(matches) → ลูกกวาดพิเศษ
 
       // 2) แรงโน้มถ่วง: ของเก่าหล่นลงมา

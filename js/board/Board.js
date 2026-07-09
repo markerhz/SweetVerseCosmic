@@ -21,10 +21,22 @@ export class Board {
     for (let row = 0; row < this.size; row++) {
       this.grid[row] = [];
       for (let col = 0; col < this.size; col++) {
-        // สุ่มแบบเลี่ยง match ตั้งต้น (ห้ามซ้ำกับ 2 ช่องทางซ้าย/บน)
+        this.grid[row][col] = new Cell(col, row);
+      }
+    }
+    this.fillRandom();
+  }
+
+  /**
+   * สุ่มลูกกวาดใหม่ทั้งกระดานแบบเลี่ยง match ตั้งต้น
+   * (ห้ามซ้ำกับ 2 ช่องทางซ้าย/บน) — ใช้ทั้งตอนเริ่มเกมและตอนสับกระดาน (reshuffle)
+   */
+  fillRandom() {
+    for (let row = 0; row < this.size; row++) {
+      for (let col = 0; col < this.size; col++) {
         let candy;
         do {
-          candy = Candy.random(rng);
+          candy = Candy.random(this.rng);
         } while (
           (col >= 2 &&
             this.grid[row][col - 1].candy.type === candy.type &&
@@ -33,7 +45,7 @@ export class Board {
             this.grid[row - 1][col].candy.type === candy.type &&
             this.grid[row - 2][col].candy.type === candy.type)
         );
-        this.grid[row][col] = new Cell(col, row, candy);
+        this.grid[row][col].candy = candy;
       }
     }
   }

@@ -30,6 +30,24 @@ header small{
   display:block;margin-top:8px;
   font-size:.55em;color:#4da8ff;text-shadow:2px 2px 0 #1a1030;
 }
+/* HUD คะแนนสไตล์ 8-bit */
+#hud{display:flex;gap:12px;margin:0 0 12px;justify-content:center}
+.hud-box{
+  background:#1a1030;
+  border:3px solid #7b5cff;
+  box-shadow:4px 4px 0 rgba(0,0,0,.45);
+  padding:8px 16px;min-width:110px;
+}
+.hud-label{
+  display:block;
+  font-family:'Press Start 2P','Courier New',monospace;
+  font-size:.45em;color:#4da8ff;margin-bottom:6px;
+}
+.hud-value{
+  font-family:'Press Start 2P','Courier New',monospace;
+  font-size:.9em;color:#fff;
+}
+#mult.hot{color:#ffd84d;text-shadow:2px 2px 0 #9c2033}
 canvas{
   border:4px solid #1a1030;
   outline:4px solid #7b5cff;   /* ขอบซ้อน 2 ชั้นแบบพิกเซล */

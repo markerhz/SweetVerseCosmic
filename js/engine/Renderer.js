@@ -24,7 +24,7 @@ export class Renderer {
     { m: '#4fe87f', l: '#a0ffc0', d: '#2a9c50', s: '#eafff2' }, // 2 คริสตัล
     { m: '#4da8ff', l: '#a0d8ff', d: '#2a6ab8', s: '#f0f8ff' }, // 3 จันทร์เสี้ยว
     { m: '#b46cff', l: '#d9b3ff', d: '#6c3ab8', s: '#ffffff' }, // 4 วงโคจร
-    { m: '#ff9c3a', l: '#ffc98f', d: '#b86a1e', s: '#ffffff' }, // 5 ดาวหาง
+    { m: '#ff6b1a', l: '#ff9e5e', d: '#a63e00', s: '#fff2e0' }, // 5 ดาวหาง (ส้มเข้ม ไม่กลืนกับเหลือง)
   ];
   /** สีเส้นขอบสไปรต์ (ดำอมม่วงแบบ Balatro) */
   static OUTLINE = '#1a1030';
@@ -64,10 +64,10 @@ export class Renderer {
         const r2 = dx * dx + dy * dy;
         let col = null;
 
-        // ทรงกลมพื้นฐาน: ขอบนอก + แสงบน-ซ้าย + เงาล่าง-ขวา
-        if (r2 <= 42.25) {
-          if (r2 > 30.25) col = O;
-          else col = (dx + dy < -3) ? P.l : (dx + dy > 4 ? P.d : P.m);
+        // ทรงกลมพื้นฐาน (รัศมี 7.4 — เต็มช่องเกือบสุด): ขอบนอก + แสงบน-ซ้าย + เงาล่าง-ขวา
+        if (r2 <= 54.76) {
+          if (r2 > 40.96) col = O;
+          else col = (dx + dy < -3.5) ? P.l : (dx + dy > 4.5 ? P.d : P.m);
         }
 
         // ---- ลายประจำชนิด ----
@@ -79,31 +79,31 @@ export class Renderer {
           case 1: // ดาวประกายกากบาท
             if (col !== null && col !== O) {
               const ax = Math.abs(dx), ay = Math.abs(dy);
-              if ((ax < 1 && ay < 4) || (ay < 1 && ax < 4) || (ax < 2 && ay < 2)) col = P.s;
+              if ((ax < 1 && ay < 4.5) || (ay < 1 && ax < 4.5) || (ax < 2 && ay < 2)) col = P.s;
             }
             break;
           case 2: { // คริสตัลเพชร
             const man = Math.abs(dx) + Math.abs(dy);
             if (col !== null && col !== O) {
-              if (man <= 3.5) col = P.s;
-              else if (man <= 4.5) col = P.l;
+              if (man <= 4) col = P.s;
+              else if (man <= 5) col = P.l;
             }
             break;
           }
           case 3: { // จันทร์เสี้ยว (วงกลมสว่าง โดนวงเงากินมุมบนขวา)
             if (col !== null && col !== O) {
-              if (r2 <= 20.25) col = P.s;
+              if (r2 <= 25) col = P.s;
               const cx = x - 9.5, cy = y - 5.5;
-              if (cx * cx + cy * cy <= 16 && col === P.s) col = P.m;
+              if (cx * cx + cy * cy <= 20 && col === P.s) col = P.m;
             }
             break;
           }
           case 4: { // วงโคจร + ดวงจันทร์เล็ก
             if (col !== null && col !== O) {
               const r = Math.sqrt(r2);
-              if (Math.abs(r - 4.6) <= 0.75) col = P.s;
+              if (Math.abs(r - 5.2) <= 0.75) col = P.s;
             }
-            const mx = x - 12, my = y - 7;
+            const mx = x - 13, my = y - 7;
             if (mx * mx + my * my <= 2 && col !== null && col !== O) col = P.l;
             break;
           }
